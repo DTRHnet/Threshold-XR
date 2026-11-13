@@ -24,6 +24,19 @@ export class HorrorAudioEngine {
   private acousticState: AcousticState = createAcousticState();
   private micEnabled = false;
 
+  // Atmospheric bed: reverb space, breathing air, and distant room events.
+  private atmosphereGain: GainNode | null = null;   // sum bus for all ambient layers
+  private atmosphereSend: GainNode | null = null;   // wet send into the room reverb
+  private reverb: ConvolverNode | null = null;
+  private reverbReturn: GainNode | null = null;
+  private creakTimer: number | null = null;
+  private atmosphereIntensity = 0;
+  private atmosphereOscNodes: OscillatorNode[] = [];
+  private atmosphereSrcNodes: AudioBufferSourceNode[] = [];
+  private atmosphereSubGain: GainNode | null = null;
+  private atmosphereWindGain: GainNode | null = null;
+  private atmosphereDroneBreath: GainNode | null = null;
+
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     if (!this.ctx) {
@@ -141,6 +154,9 @@ export class HorrorAudioEngine {
     shimOsc.start();
 
     this.roomOscNodes = [oscA, oscB, shimOsc];
+
+    // Layer 4+: rich atmospheric bed — reverb space, breathing air, distant room events
+    this.startAtmosphere(ctx);
   }
 
   public stopRoomTone() {
@@ -169,6 +185,264 @@ export class HorrorAudioEngine {
     this.droneFilter = null;
     this.droneGain = null;
     this.shimmerGain = null;
+
+    this.stopAtmosphere();
+  }
+
+  /**
+   * Procedural room impulse response: a dark decaying noise tail. Gives every ambient
+   * layer cavernous enclosed space without shipping any audio assets.
+   */
+  private buildReverbImpulse(ctx: AudioContext, seconds = 1.9): AudioBuffer {
+    const rate = ctx.sampleRate;
+    const length = Math.floor(rate * seconds);
+    const buf = ctx.createBuffer(2, length, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buf.getChannelData(ch);
+      let prev = 0;
+      for (let i = 0; i < length; i++) {
+        const env = Math.pow(1 - i / length, 2.4);
+        // One-pole lowpass on the noise so the tail is dark rather than hissy.
+        prev = prev * 0.82 + (Math.random() * 2 - 1) * 0.18;
+        data[i] = prev * env;
+      }
+    }
+    return buf;
+  }
+
+  /**
+   * Creepy ambience: breathing air, a sub-harmonic swell under the existing drone, a
+   * distant room tail, and randomised far-off creaks placed around the listener.
+   */
+  private startAtmosphere(ctx: AudioContext) {
+    if (!this.masterGain || !this.noiseBuffer || this.atmosphereGain) return;
+
+    // --- Reverb space -------------------------------------------------------
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = this.buildReverbImpulse(ctx);
+    this.reverbReturn = ctx.createGain();
+    this.reverbReturn.gain.value = 0.9;
+    this.reverb.connect(this.reverbReturn);
+    this.reverbReturn.connect(this.masterGain);
+
+    this.atmosphereGain = ctx.createGain();
+    this.atmosphereGain.gain.value = 0.12;
+    this.atmosphereGain.connect(this.masterGain);
+
+    this.atmosphereSend = ctx.createGain();
+    this.atmosphereSend.gain.value = 0.55;
+    this.atmosphereGain.connect(this.atmosphereSend);
+    this.atmosphereSend.connect(this.reverb);
+
+    // --- Layer A: breathing air, slowly swept -------------------------------
+    const windSrc = ctx.createBufferSource();
+    windSrc.buffer = this.noiseBuffer;
+    windSrc.loop = true;
+
+    const windBand = ctx.createBiquadFilter();
+    windBand.type = 'bandpass';
+    windBand.frequency.value = 380;
+    windBand.Q.value = 0.7;
+
+    this.atmosphereWindGain = ctx.createGain();
+    this.atmosphereWindGain.gain.value = 0.018;
+
+    windSrc.connect(windBand);
+    windBand.connect(this.atmosphereWindGain);
+    this.atmosphereWindGain.connect(this.atmosphereGain);
+    windSrc.start();
+    this.atmosphereSrcNodes.push(windSrc);
+
+    // Slow sweep so the room reads as "inhaling"
+    const sweepLfo = ctx.createOscillator();
+    sweepLfo.type = 'sine';
+    sweepLfo.frequency.value = 0.06;
+    const sweepDepth = ctx.createGain();
+    sweepDepth.gain.value = 210;
+    sweepLfo.connect(sweepDepth);
+    sweepDepth.connect(windBand.frequency);
+    sweepLfo.start();
+    this.atmosphereOscNodes.push(sweepLfo);
+    // Sweep depth survives only while its LFO runs; keep a handle for teardown.
+    (sweepLfo as unknown as { _depth?: GainNode })._depth = sweepDepth;
+
+    // --- Layer B: sub-harmonic swell beneath the existing drone -------------
+    const subOsc = ctx.createOscillator();
+    subOsc.type = 'sine';
+    subOsc.frequency.value = 27.5; // A0, below the existing D1/Eb1 beat
+
+    const subFilter = ctx.createBiquadFilter();
+    subFilter.type = 'lowpass';
+    subFilter.frequency.value = 70;
+
+    this.atmosphereSubGain = ctx.createGain();
+    this.atmosphereSubGain.gain.value = 0.02;
+
+    subOsc.connect(subFilter);
+    subFilter.connect(this.atmosphereSubGain);
+    this.atmosphereSubGain.connect(this.atmosphereGain);
+    subOsc.start();
+    this.atmosphereOscNodes.push(subOsc);
+
+    // Breathing amplitude so the sub never sits perfectly still
+    const breathLfo = ctx.createOscillator();
+    breathLfo.type = 'sine';
+    breathLfo.frequency.value = 0.085;
+    this.atmosphereDroneBreath = ctx.createGain();
+    this.atmosphereDroneBreath.gain.value = 0.011;
+    breathLfo.connect(this.atmosphereDroneBreath);
+    this.atmosphereDroneBreath.connect(this.atmosphereSubGain.gain);
+    breathLfo.start();
+    this.atmosphereOscNodes.push(breathLfo);
+
+    // --- Layer C: distant room events --------------------------------------
+    this.scheduleAtmosphereEvent();
+  }
+
+  private stopAtmosphere() {
+    if (this.creakTimer !== null) {
+      window.clearTimeout(this.creakTimer);
+      this.creakTimer = null;
+    }
+    for (const src of this.atmosphereSrcNodes) {
+      try {
+        src.stop();
+      } catch {
+        // already stopped
+      }
+      src.disconnect();
+    }
+    this.atmosphereSrcNodes = [];
+    for (const osc of this.atmosphereOscNodes) {
+      const depth = (osc as unknown as { _depth?: GainNode })._depth;
+      try {
+        osc.stop();
+      } catch {
+        // already stopped
+      }
+      osc.disconnect();
+      depth?.disconnect();
+    }
+    this.atmosphereOscNodes = [];
+    this.atmosphereGain?.disconnect();
+    this.atmosphereSend?.disconnect();
+    this.reverbReturn?.disconnect();
+    this.reverb?.disconnect();
+    this.atmosphereSubGain?.disconnect();
+    this.atmosphereWindGain?.disconnect();
+    this.atmosphereDroneBreath?.disconnect();
+    this.atmosphereGain = null;
+    this.atmosphereSend = null;
+    this.reverb = null;
+    this.reverbReturn = null;
+    this.atmosphereSubGain = null;
+    this.atmosphereWindGain = null;
+    this.atmosphereDroneBreath = null;
+  }
+
+  /** Randomised far-off creak / settle / knock, panned somewhere around the player. */
+  private playDistantCreak() {
+    if (!this.ctx || !this.noiseBuffer || !this.atmosphereGain || this.muted) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = false;
+    src.playbackRate.value = 0.55 + Math.random() * 0.5;
+
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    const startFreq = 260 + Math.random() * 620;
+    band.frequency.setValueAtTime(startFreq, now);
+    // Downward glide gives it the wood-settling / metal-groan quality
+    band.frequency.exponentialRampToValueAtTime(
+      Math.max(90, startFreq * (0.45 + Math.random() * 0.25)),
+      now + 0.7,
+    );
+    band.Q.value = 5 + Math.random() * 9;
+
+    const env = ctx.createGain();
+    const peak = 0.035 + Math.random() * 0.05;
+    env.gain.setValueAtTime(0.0001, now);
+    env.gain.exponentialRampToValueAtTime(peak, now + 0.06 + Math.random() * 0.09);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + 0.75 + Math.random() * 0.9);
+
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = (Math.random() * 2 - 1) * 0.85;
+
+    src.connect(band);
+    band.connect(env);
+    env.connect(panner);
+    panner.connect(this.atmosphereGain);
+    if (this.atmosphereSend) panner.connect(this.atmosphereSend);
+
+    src.start(now);
+    src.stop(now + 1.9);
+  }
+
+  /**
+   * Low impact for the instant an entity first manifests: a sub drop plus a short air
+   * transient, so a silent reveal still lands.
+   */
+  public playManifestStinger(intensity = 1, azimuthDeg = 0) {
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const level = Math.max(0.05, Math.min(1, intensity));
+
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = Math.max(-1, Math.min(1, azimuthDeg / 90));
+    panner.connect(this.masterGain);
+    if (this.atmosphereSend) panner.connect(this.atmosphereSend);
+
+    // Sub drop — felt more than heard
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(92, now);
+    sub.frequency.exponentialRampToValueAtTime(31, now + 0.55);
+    const subEnv = ctx.createGain();
+    subEnv.gain.setValueAtTime(0.0001, now);
+    subEnv.gain.exponentialRampToValueAtTime(0.1 * level, now + 0.03);
+    subEnv.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+    sub.connect(subEnv);
+    subEnv.connect(panner);
+    sub.start(now);
+    sub.stop(now + 1.5);
+
+    // Air transient so it cuts through against passthrough room noise
+    if (this.noiseBuffer) {
+      const n = ctx.createBufferSource();
+      n.buffer = this.noiseBuffer;
+      n.playbackRate.value = 0.9;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 900;
+      const nEnv = ctx.createGain();
+      nEnv.gain.setValueAtTime(0.0001, now);
+      nEnv.gain.exponentialRampToValueAtTime(0.05 * level, now + 0.012);
+      nEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+      n.connect(hp);
+      hp.connect(nEnv);
+      nEnv.connect(panner);
+      n.start(now);
+      n.stop(now + 0.5);
+    }
+  }
+
+  /** Re-arms the next distant event; fires more often as dread climbs. */
+  private scheduleAtmosphereEvent() {
+    if (this.creakTimer !== null) return;
+    const hot = Math.min(1, Math.max(0, this.atmosphereIntensity));
+    const minMs = 9000 - hot * 5500;
+    const maxMs = 22000 - hot * 12000;
+    const delay = minMs + Math.random() * Math.max(1000, maxMs - minMs);
+    this.creakTimer = window.setTimeout(() => {
+      this.creakTimer = null;
+      if (!this.atmosphereGain) return; // torn down while waiting
+      this.playDistantCreak();
+      this.scheduleAtmosphereEvent();
+    }, delay);
   }
 
   /**
@@ -197,6 +471,12 @@ export class HorrorAudioEngine {
     this.droneGain.gain.setTargetAtTime(targetDroneGain, now, 0.35);
     this.droneFilter.frequency.setTargetAtTime(targetCutoff, now, 0.4);
     this.shimmerGain.gain.setTargetAtTime(targetShimmer, now, 0.45);
+
+    // Atmospheric bed responds to dread: the room gets louder and the air moves more
+    this.atmosphereIntensity = tensionLevel;
+    this.atmosphereGain?.gain.setTargetAtTime(0.1 + tensionLevel * 0.2, now, 0.9);
+    this.atmosphereWindGain?.gain.setTargetAtTime(0.014 + tensionLevel * 0.05, now, 1.1);
+    this.atmosphereSubGain?.gain.setTargetAtTime(0.016 + tensionLevel * 0.05, now, 1.0);
 
     // Subtle low heartbeat pulse when player sits frozen under high tension
     const wallMs = performance.now();

@@ -11,6 +11,7 @@ import {
 } from './engine/director';
 import { createRoomPreset } from './engine/rooms';
 import {
+  azimuthDegRelativeToPlayer,
   createInitialAttention,
   extractSpatialSlots,
   scoreSlotsLocally,
@@ -92,6 +93,7 @@ export default function App() {
   const elapsedRef = useRef<number>(0);
   const peakDbRef = useRef<number>(0);
   const highestPhaseRef = useRef<HorrorPhase>('Baseline');
+  const seenThreatIdsRef = useRef<Set<string>>(new Set());
   const flashTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -254,6 +256,7 @@ export default function App() {
       0,
     );
     directorRef.current = createDirectorState(durationRef.current);
+    seenThreatIdsRef.current = new Set();
 
     audioRef.current?.resetAcousticState();
     audioRef.current?.startRoomTone();
@@ -471,6 +474,19 @@ export default function App() {
       highestPhaseRef.current = tickRes.state.phase;
 
       rendererRef.current?.setActiveThreats(tickRes.state.activeThreats);
+
+      // Sting the instant an entity first manifests, panned to where it appeared,
+      // so a silent reveal doesn't get missed.
+      for (const threat of tickRes.state.activeThreats) {
+        if (seenThreatIdsRef.current.has(threat.id)) continue;
+        seenThreatIdsRef.current.add(threat.id);
+        const azimuth = azimuthDegRelativeToPlayer(
+          attentionRef.current.playerPosition,
+          attentionRef.current.playerYawRad,
+          threat.position,
+        );
+        audioRef.current?.playManifestStinger(0.75, Math.round(azimuth));
+      }
       if (tickRes.state.phase === 'Compression') {
         rendererRef.current?.setPassthroughDimness(
           (tickRes.state.progress - 0.88) / 0.12,
