@@ -49,22 +49,24 @@ export interface DirectorState {
 }
 
 export function computeHorrorPhase(progress: number): HorrorPhase {
-  if (progress < 0.12) return 'Baseline';
-  if (progress < 0.38) return 'PeripheralDoubt';
+  // Baseline is a short breath, not dead air: it exists to let the player settle and
+  // register the silence before the first intrusion, not to stall them for 20+ seconds.
+  if (progress < 0.05) return 'Baseline';
+  if (progress < 0.36) return 'PeripheralDoubt';
   if (progress < 0.68) return 'Occupation';
   if (progress < 0.88) return 'SpatialBetrayal';
   return 'Compression';
 }
 
 export function createDirectorState(targetDurationSec: number): DirectorState {
-  const firstEventDelay = Math.max(7, targetDurationSec * 0.13);
+  const firstEventDelay = Math.max(4.5, targetDurationSec * 0.055);
   return {
     phase: 'Baseline',
     progress: 0,
     activeThreats: [],
     recentlyUsedSlotIds: [],
     nextEventAtSec: firstEventDelay,
-    nextAnomalyAtSec: Math.max(5.5, targetDurationSec * 0.08),
+    nextAnomalyAtSec: Math.max(3.5, targetDurationSec * 0.05),
     stillnessSeconds: 0,
     scareReadiness: 0.15,
     lastScareHitAtSec: -999,
