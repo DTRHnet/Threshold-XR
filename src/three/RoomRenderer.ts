@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { VisualAnomalyKind } from '../engine/director';
+import { buildThreatRig } from './threatRigs';
 import type {
   ActiveThreat,
   GameState,
@@ -24,6 +25,7 @@ const _xrQuat = new THREE.Quaternion();
 const _xrScale = new THREE.Vector3();
 const _xrMat = new THREE.Matrix4();
 const _xrEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _dimFwd = new THREE.Vector3();
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -237,204 +239,38 @@ function buildFurnitureGroup(
 }
 
 /**
+ * Stable 0..1 pseudo-random value derived from a threat id, so idle motion is erratic
+ * between entities yet deterministic frame-to-frame (no popping).
+ */
+function threatMotionSeed(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (Math.abs(h) % 1000) / 1000;
+}
+
+/**
  * Builds an uncanny multi-part monochrome silhouette entity (6-9 articulated parts)
  * tailored to its ThreatArchetype (WallPeel, DoorwayPeeker, UnderVoidCrawler, CeilingHang, CornerWatcher).
  */
+/**
+ * Thin adapter over the declarative rigs in `threatRigs.ts`. Kept so callers and
+ * animation code are decoupled from geometry: to redesign the silhouettes (smoother
+ * surfaces, or a substituted GLTF model) edit `threatRigs.ts` only.
+ */
 function buildThreatEntityGroup(
   archetype: ThreatArchetype,
-  voidMat: THREE.MeshStandardMaterial,
-  rimMat: THREE.MeshStandardMaterial,
-  eyeMat: THREE.MeshStandardMaterial,
+  voidMat: THREE.Material,
+  rimMat: THREE.Material,
+  eyeMat: THREE.Material,
 ): THREE.Group {
-  const root = new THREE.Group();
-
-  if (archetype === 'CeilingHang') {
-    // Inverted figure descending from ceiling anchor (local y = 0 is ceiling!)
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.16, 0.95, 10), voidMat);
-    torso.position.y = -0.65;
-    root.add(torso);
-
-    const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), rimMat);
-    pelvis.position.y = -0.18;
-    root.add(pelvis);
-
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.26, 8), voidMat);
-    neck.position.y = -1.2;
-    root.add(neck);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), rimMat);
-    head.scale.set(0.85, 1.32, 0.9);
-    head.position.y = -1.38;
-    root.add(head);
-
-    // Two elongated hanging arms reaching downward
-    for (const sx of [-1, 1]) {
-      const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.025, 0.55, 8), voidMat);
-      upperArm.position.set(sx * 0.16, -1.25, 0.03);
-      upperArm.rotation.z = sx * 0.08;
-      root.add(upperArm);
-
-      const foreArm = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.015, 0.52, 8), rimMat);
-      foreArm.position.set(sx * 0.19, -1.75, 0.06);
-      root.add(foreArm);
-    }
-    return root;
-  }
-
-  if (archetype === 'UnderVoidCrawler') {
-    // Low, spider-like crouched silhouette peeking out from under furniture
-    const crouchBody = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), voidMat);
-    crouchBody.scale.set(1.0, 0.68, 1.35);
-    crouchBody.position.set(0, 0.24, -0.08);
-    root.add(crouchBody);
-
-    const spineRidge = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42), rimMat);
-    spineRidge.position.set(0, 0.34, -0.12);
-    root.add(spineRidge);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), rimMat);
-    head.scale.set(0.86, 1.15, 0.95);
-    head.position.set(0, 0.3, 0.24);
-    root.add(head);
-
-    // Subtle pale eye catchlights
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 6), eyeMat);
-      eye.position.set(sx * 0.038, 0.31, 0.33);
-      root.add(eye);
-    }
-
-    // Two long splayed arms reaching forward along the floor
-    for (const sx of [-1, 1]) {
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.018, 0.52, 8), voidMat);
-      arm.rotation.x = Math.PI * 0.48;
-      arm.rotation.z = sx * 0.18;
-      arm.position.set(sx * 0.2, 0.09, 0.26);
-      root.add(arm);
-    }
-    return root;
-  }
-
-  if (archetype === 'FaceAssault') {
-    // High-contrast near-plane monochrome skull bust for direct FOV assaults
-    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.155, 16, 14), rimMat);
-    cranium.scale.set(0.86, 1.38, 1.02);
-    cranium.position.set(0, 0.08, 0);
-    root.add(cranium);
-
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.055, 0.14), rimMat);
-    brow.position.set(0, 0.15, 0.08);
-    root.add(brow);
-
-    // Deep sunken dark orbital cavities + tiny pinpoint glowing irises
-    for (const sx of [-1, 1]) {
-      const cavity = new THREE.Mesh(new THREE.SphereGeometry(0.044, 10, 8), voidMat);
-      cavity.scale.set(1.1, 1.25, 0.65);
-      cavity.position.set(sx * 0.056, 0.1, 0.125);
-      root.add(cavity);
-
-      const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), eyeMat);
-      iris.position.set(sx * 0.056, 0.1, 0.15);
-      root.add(iris);
-
-      const cheek = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.11, 0.08), rimMat);
-      cheek.position.set(sx * 0.068, 0.01, 0.085);
-      root.add(cheek);
-    }
-
-    // Hollowed gaping lower jaw / split void mouth
-    const mouthVoid = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.032, 0.17, 10), voidMat);
-    mouthVoid.position.set(0, -0.06, 0.095);
-    root.add(mouthVoid);
-
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), rimMat);
-    chin.scale.set(0.85, 1.1, 0.9);
-    chin.position.set(0, -0.14, 0.075);
-    root.add(chin);
-
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.16, 0.34, 10), voidMat);
-    neck.position.set(0, -0.26, -0.03);
-    root.add(neck);
-    return root;
-  }
-
-  if (archetype === 'InterceptStalker') {
-    // Lean 2.05m silhouetted figure leaned forward for LookIntercept & PeripheralSnap
-    const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.075, 1.0, 10), voidMat);
-    legs.position.y = 0.5;
-    root.add(legs);
-
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.11, 0.78, 10), voidMat);
-    torso.position.set(0, 1.32, 0.04);
-    torso.rotation.x = 0.14;
-    root.add(torso);
-
-    const shoulders = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.13, 0.2), rimMat);
-    shoulders.position.set(0, 1.68, 0.08);
-    root.add(shoulders);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 14, 12), rimMat);
-    head.scale.set(0.84, 1.34, 0.95);
-    head.position.set(0, 1.9, 0.14);
-    head.rotation.z = -0.18;
-    root.add(head);
-
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 6), eyeMat);
-      eye.position.set(sx * 0.04, 1.91, 0.25);
-      root.add(eye);
-
-      // Reached-forward elongated arms
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.018, 0.92, 8), voidMat);
-      arm.position.set(sx * 0.26, 1.35, 0.34);
-      arm.rotation.x = -Math.PI * 0.36;
-      arm.rotation.z = sx * -0.08;
-      root.add(arm);
-    }
-    return root;
-  }
-
-  // Tall gaunt standing/peeling silhouette (WallPeel, DoorwayPeeker, CornerWatcher)
-  const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.09, 0.95, 10), voidMat);
-  legs.position.y = 0.475;
-  root.add(legs);
-
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.12, 0.72, 10), voidMat);
-  torso.position.y = 1.28;
-  root.add(torso);
-
-  const shoulders = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.12, 0.18), rimMat);
-  shoulders.position.y = 1.62;
-  root.add(shoulders);
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.055, 0.18, 8), voidMat);
-  neck.position.y = 1.74;
-  root.add(neck);
-
-  // Tilted elongated head
-  const headGroup = new THREE.Group();
-  headGroup.position.set(0, 1.9, 0.02);
-  headGroup.rotation.z = archetype === 'CornerWatcher' || archetype === 'DoorwayPeeker' ? 0.24 : 0.08;
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), rimMat);
-  skull.scale.set(0.82, 1.28, 0.92);
-  headGroup.add(skull);
-
-  for (const sx of [-1, 1]) {
-    const socket = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 6), eyeMat);
-    socket.position.set(sx * 0.036, 0.02, 0.096);
-    headGroup.add(socket);
-  }
-  root.add(headGroup);
-
-  // Asymmetric hanging arms
-  for (const sx of [-1, 1]) {
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.02, 0.88, 8), voidMat);
-    arm.position.set(sx * 0.23, 1.18, 0.02);
-    arm.rotation.z = sx * -0.06;
-    root.add(arm);
-  }
-
-  return root;
+  return buildThreatRig(archetype, {
+    void: voidMat,
+    rim: rimMat,
+    eye: eyeMat,
+  }).root;
 }
 
 export interface RendererCallbacks {
@@ -515,6 +351,11 @@ export class ThresholdRoomRenderer {
   private xrWorldOffset = new THREE.Vector3(0, 0, 0);
   private xrPlaneCache = new Map<XRPlaneLike, { lastChanged: number; mesh: THREE.Mesh }>();
   private lastXrPlaneSyncMs = 0;
+
+  // Camera-locked dark overlay. Fog/exposure can't dim real passthrough, so in XR a
+  // black plane is composited in front of the viewer to close the world in.
+  private dimOverlay: THREE.Mesh | null = null;
+  private currentDimness = 0;
 
   // Optional live monochrome webcam passthrough background
   private webcamVideo: HTMLVideoElement | null = null;
@@ -658,24 +499,31 @@ export class ThresholdRoomRenderer {
     });
 
     this.threatVoidMat = new THREE.MeshStandardMaterial({
-      color: 0x050505,
-      roughness: 0.94,
-      metalness: 0.04,
+      // True void: absorbs light instead of catching it, so the body reads as a hole
+      // punched in passthrough rather than a grey mannequin.
+      color: 0x000000,
+      roughness: 1.0,
+      metalness: 0.0,
       transparent: true,
-      opacity: 0.96,
+      opacity: 0.97,
     });
     this.threatRimMat = new THREE.MeshStandardMaterial({
-      color: 0x3b3b3b,
-      roughness: 0.52,
-      metalness: 0.18,
+      // Cold self-lit edge so the silhouette is readable in a dark room AND in a
+      // bright real-world passthrough feed.
+      color: 0x24242a,
+      emissive: 0x101014,
+      emissiveIntensity: 0.85,
+      roughness: 0.72,
+      metalness: 0.12,
       transparent: true,
-      opacity: 0.96,
+      opacity: 0.97,
     });
     this.threatEyeMat = new THREE.MeshStandardMaterial({
-      color: 0xe6e6e6,
-      emissive: 0x9c9c9c,
-      emissiveIntensity: 0.35,
-      roughness: 0.2,
+      // Pinpoint glow — the only bright thing on the entity, and the thing you notice.
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 2.6,
+      roughness: 0.12,
     });
 
     this.scene.add(this.xrOcclusionGroup);
@@ -758,12 +606,74 @@ export class ThresholdRoomRenderer {
   }
 
   public setPassthroughDimness(compressionFactor: number) {
-    if (this.xrSession) return;
-    // Slightly tighten fog and exposure in final compression phase (strictly grayscale)
-    if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.density = 0.085 + compressionFactor * 0.065;
+    const dim = Math.max(0, Math.min(1, compressionFactor));
+    this.currentDimness = dim;
+
+    // Fog/exposure only affect rendered geometry, and in passthrough the real world is
+    // composited by the system — so the visible darkening in XR comes from the overlay.
+    if (!this.xrSession) {
+      if (this.scene.fog instanceof THREE.FogExp2) {
+        this.scene.fog.density = 0.085 + dim * 0.065;
+      }
+      this.renderer.toneMappingExposure = 1.05 - dim * 0.16;
     }
-    this.renderer.toneMappingExposure = 1.05 - compressionFactor * 0.16;
+  }
+
+  private ensureDimOverlay(): THREE.Mesh {
+    if (this.dimOverlay) return this.dimOverlay;
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    mesh.name = 'xr-dim-overlay';
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 999;
+    mesh.visible = false;
+    this.scene.add(mesh);
+    this.dimOverlay = mesh;
+    return mesh;
+  }
+
+  /**
+   * Billboards the dim overlay in front of the viewer. Called from the XR loop with the
+   * real head pose, since `this.camera` is not what WebXR renders with.
+   */
+  private applyDimOverlay(
+    position: THREE.Vector3,
+    quaternion: THREE.Quaternion,
+    fovDeg: number,
+    aspect: number,
+  ) {
+    const mesh = this.ensureDimOverlay();
+    // Cap at 0.6 so the real room stays readable — this should close in, not black out.
+    const opacity = this.currentDimness * 0.6;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+    material.opacity = opacity;
+    mesh.visible = opacity > 0.002;
+    if (!mesh.visible) return;
+
+    const dist = 0.4;
+    _dimFwd.set(0, 0, -1).applyQuaternion(quaternion);
+    mesh.position.copy(position).addScaledVector(_dimFwd, dist);
+    mesh.quaternion.copy(quaternion);
+
+    const h = 2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2) * dist * 1.3;
+    const safeAspect = Number.isFinite(aspect) && aspect > 0.1 ? aspect : 1;
+    mesh.scale.set(h * safeAspect * 1.3, h, 1);
+  }
+
+  private hideDimOverlay() {
+    if (this.dimOverlay) {
+      this.dimOverlay.visible = false;
+      (this.dimOverlay.material as THREE.MeshBasicMaterial).opacity = 0;
+    }
+    this.currentDimness = 0;
   }
 
   public triggerCameraPunch(durationSec = 0.28) {
@@ -956,6 +866,7 @@ export class ThresholdRoomRenderer {
   private handleXrSessionEnd() {
     this.xrSession = null;
     this.renderer.setAnimationLoop(null);
+    this.hideDimOverlay();
     this.roomGroup.visible = true;
     this.scene.background = new THREE.Color(0x060606);
     this.scene.fog = new THREE.FogExp2(0x060606, 0.085);
@@ -1374,6 +1285,11 @@ export class ThresholdRoomRenderer {
           this.playerYaw,
           _xrEuler.x,
         );
+
+        // Close the world in during Compression: the overlay follows the real head pose.
+        if (this.currentDimness > 0) {
+          this.applyDimOverlay(_xrPos, _xrQuat, 100, 1);
+        }
       }
 
       // Optional Quest/Pico controller thumbstick locomotion for seated play
@@ -1407,7 +1323,10 @@ export class ThresholdRoomRenderer {
     for (const threat of this.activeThreats) {
       const entry = this.threatMeshes.get(threat.id);
       if (!entry) continue;
-      const m = threat.manifestation;
+      // Bias the reveal late: the entity stays concealed far longer, then is simply
+      // THERE. A snappier arrival startles more than a linear fade-in.
+      const m = Math.pow(Math.max(0, Math.min(1, threat.manifestation)), 1.7);
+      const seed = threatMotionSeed(threat.id);
 
       if (entry.archetype === 'FaceAssault') {
         entry.group.position.set(threat.position.x, threat.position.y, threat.position.z);
@@ -1438,10 +1357,11 @@ export class ThresholdRoomRenderer {
           threat.position.y > 1.5 ? threat.position.y : this.currentRoom.height;
         entry.group.position.set(
           threat.position.x,
-          ceilingY + (1 - m) * 0.45,
+          ceilingY + (1 - m) * 0.55,
           threat.position.z,
         );
-        entry.group.rotation.z = Math.sin(elapsedSec * 0.9) * 0.03;
+        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.88, 1.0, m));
+        entry.group.rotation.z = Math.sin(elapsedSec * 0.9) * 0.05;
       } else {
         entry.group.position.set(
           threat.position.x + threat.normal.x * (m * 0.18),
@@ -1450,6 +1370,14 @@ export class ThresholdRoomRenderer {
         );
         entry.group.scale.setScalar(THREE.MathUtils.lerp(0.82, 1.0, m));
       }
+
+      // Living micro-motion: a slow sway plus a fine tremor, deterministic per threat
+      // so it never looks looped. Nothing should ever be perfectly still.
+      const tremorFreq = 2.1 + seed * 3.4;
+      entry.group.position.y += Math.sin(elapsedSec * tremorFreq + seed * 6.283) * 0.009 * m;
+      entry.group.position.x +=
+        Math.sin(elapsedSec * tremorFreq * 0.63 + seed * 3.1) * 0.006 * m;
+      entry.group.rotation.z += Math.sin(elapsedSec * (1.25 + seed) + seed * 2.0) * 0.038 * m;
     }
   }
 
