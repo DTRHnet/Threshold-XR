@@ -12,7 +12,16 @@ export type ThreatArchetype =
   | 'DoorwayPeeker'
   | 'UnderVoidCrawler'
   | 'CeilingHang'
-  | 'CornerWatcher';
+  | 'CornerWatcher'
+  | 'InterceptStalker'
+  | 'FaceAssault';
+
+export type ScarePattern =
+  | 'RoomAnchor'
+  | 'LookIntercept'
+  | 'PeripheralSnap'
+  | 'BlackoutReveal'
+  | 'FaceAssault';
 
 export type HorrorPhase =
   | 'Baseline'
@@ -104,11 +113,25 @@ export interface AttentionSector {
   dwellSeconds: number;
 }
 
+export interface CameraHistorySample {
+  timeSec: number;
+  yawRad: number;
+  pitchRad: number;
+}
+
 export interface AttentionState {
   sectors: AttentionSector[];
   playerPosition: Vec3;
   playerYawRad: number;
+  pitchRad: number;
   angularVelocityRadPerSec: number;
+  signedYawVelocityRadPerSec: number;
+  pitchVelocityRadPerSec: number;
+  predictedYawRad: number;
+  movementSpeedMps: number;
+  moveDirX: number;
+  moveDirZ: number;
+  history: CameraHistorySample[];
   lastUpdateSec: number;
 }
 
@@ -133,10 +156,17 @@ export interface ActiveThreat {
   slotId: string;
   slotType: SlotType;
   archetype: ThreatArchetype;
+  scarePattern?: ScarePattern;
   position: Vec3;
+  lungeStartPos?: Vec3;
   normal: Vec3;
   /** 0 = concealed/flat, 1 = fully manifested */
   manifestation: number;
+  /** 0..1 lunge interpolation when snapping from periphery to center */
+  lungeProgress?: number;
+  /** True when staged in periphery waiting for player to glance toward it */
+  awaitingGlanceSnap?: boolean;
+  prevAngleDeg?: number;
   state: 'staging' | 'active' | 'retreating' | 'dismissed';
   spawnedAtSec: number;
   timeInGazeSec: number;

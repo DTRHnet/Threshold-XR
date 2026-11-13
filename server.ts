@@ -1,5 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import https from 'node:https';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
@@ -277,7 +281,11 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, geminiConfigured: Boolean(aiClient) });
+    res.json({
+      ok: true,
+      geminiConfigured: Boolean(aiClient),
+      appUrl: process.env.APP_URL || null,
+    });
   });
 
   app.post('/api/ai/analyze-room', async (req, res) => {
@@ -305,9 +313,42 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`THRESHOLD server listening on http://0.0.0.0:${PORT}`);
-  });
+  if (process.env.HTTPS === '1') {
+    const keyPath = process.env.SSL_KEY_PATH || path.join(os.tmpdir(), 'threshold-dev-key.pem');
+    const certPath = process.env.SSL_CERT_PATH || path.join(os.tmpdir(), 'threshold-dev-cert.pem');
+    if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+      execFileSync(
+        'openssl',
+        [
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-keyout',
+          keyPath,
+          '-out',
+          certPath,
+          '-days',
+          '30',
+          '-nodes',
+          '-subj',
+          '/CN=localhost',
+        ],
+        { stdio: 'ignore' },
+      );
+    }
+    const creds = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    };
+    https.createServer(creds, app).listen(PORT, '0.0.0.0', () => {
+      console.log(`THRESHOLD server listening on https://0.0.0.0:${PORT}`);
+    });
+  } else {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`THRESHOLD server listening on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
 startServer();

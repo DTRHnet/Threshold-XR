@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import type { VisualAnomalyKind } from '../engine/director';
 import type {
   ActiveThreat,
   GameState,
@@ -314,6 +315,85 @@ function buildThreatEntityGroup(
     return root;
   }
 
+  if (archetype === 'FaceAssault') {
+    // High-contrast near-plane monochrome skull bust for direct FOV assaults
+    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.155, 16, 14), rimMat);
+    cranium.scale.set(0.86, 1.38, 1.02);
+    cranium.position.set(0, 0.08, 0);
+    root.add(cranium);
+
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.055, 0.14), rimMat);
+    brow.position.set(0, 0.15, 0.08);
+    root.add(brow);
+
+    // Deep sunken dark orbital cavities + tiny pinpoint glowing irises
+    for (const sx of [-1, 1]) {
+      const cavity = new THREE.Mesh(new THREE.SphereGeometry(0.044, 10, 8), voidMat);
+      cavity.scale.set(1.1, 1.25, 0.65);
+      cavity.position.set(sx * 0.056, 0.1, 0.125);
+      root.add(cavity);
+
+      const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), eyeMat);
+      iris.position.set(sx * 0.056, 0.1, 0.15);
+      root.add(iris);
+
+      const cheek = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.11, 0.08), rimMat);
+      cheek.position.set(sx * 0.068, 0.01, 0.085);
+      root.add(cheek);
+    }
+
+    // Hollowed gaping lower jaw / split void mouth
+    const mouthVoid = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.032, 0.17, 10), voidMat);
+    mouthVoid.position.set(0, -0.06, 0.095);
+    root.add(mouthVoid);
+
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), rimMat);
+    chin.scale.set(0.85, 1.1, 0.9);
+    chin.position.set(0, -0.14, 0.075);
+    root.add(chin);
+
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.16, 0.34, 10), voidMat);
+    neck.position.set(0, -0.26, -0.03);
+    root.add(neck);
+    return root;
+  }
+
+  if (archetype === 'InterceptStalker') {
+    // Lean 2.05m silhouetted figure leaned forward for LookIntercept & PeripheralSnap
+    const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.075, 1.0, 10), voidMat);
+    legs.position.y = 0.5;
+    root.add(legs);
+
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.11, 0.78, 10), voidMat);
+    torso.position.set(0, 1.32, 0.04);
+    torso.rotation.x = 0.14;
+    root.add(torso);
+
+    const shoulders = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.13, 0.2), rimMat);
+    shoulders.position.set(0, 1.68, 0.08);
+    root.add(shoulders);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 14, 12), rimMat);
+    head.scale.set(0.84, 1.34, 0.95);
+    head.position.set(0, 1.9, 0.14);
+    head.rotation.z = -0.18;
+    root.add(head);
+
+    for (const sx of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 6), eyeMat);
+      eye.position.set(sx * 0.04, 1.91, 0.25);
+      root.add(eye);
+
+      // Reached-forward elongated arms
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.018, 0.92, 8), voidMat);
+      arm.position.set(sx * 0.26, 1.35, 0.34);
+      arm.rotation.x = -Math.PI * 0.36;
+      arm.rotation.z = sx * -0.08;
+      root.add(arm);
+    }
+    return root;
+  }
+
   // Tall gaunt standing/peeling silhouette (WallPeel, DoorwayPeeker, CornerWatcher)
   const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.09, 0.95, 10), voidMat);
   legs.position.y = 0.475;
@@ -358,7 +438,7 @@ function buildThreatEntityGroup(
 }
 
 export interface RendererCallbacks {
-  onPoseUpdate: (pos: Vec3, yawRad: number) => void;
+  onPoseUpdate: (pos: Vec3, yawRad: number, pitchRad: number) => void;
   onXrPlanesUpdated?: (planes: DetectedPlaneSnapshot[]) => void;
   onXrSessionEnded?: () => void;
 }
@@ -374,6 +454,20 @@ export class ThresholdRoomRenderer {
   private xrOcclusionGroup = new THREE.Group();
   private threatGroup = new THREE.Group();
   private threatMeshes = new Map<string, { group: THREE.Group; archetype: ThreatArchetype }>();
+
+  // Intelligent shadow/light anomaly rigging (works in both 3D room & WebXR passthrough)
+  private hemiLight: THREE.HemisphereLight;
+  private keyLight: THREE.DirectionalLight;
+  private rimFill: THREE.PointLight;
+  private peripheralShadowMat: THREE.MeshBasicMaterial;
+  private peripheralShadowMesh: THREE.Mesh;
+  private anomalyKind: VisualAnomalyKind | null = null;
+  private anomalyAge = 0;
+  private anomalyDuration = 0;
+  private anomalyStartAngle = 0;
+  private anomalySweepDir = 1;
+  private cameraPunchAge = 0;
+  private cameraPunchDuration = 0;
 
   // Materials & textures
   private wallMat: THREE.MeshStandardMaterial;
@@ -479,26 +573,42 @@ export class ThresholdRoomRenderer {
     pmrem.dispose();
 
     // Strict monochrome lighting rig (cold moonlight/ambient contrast)
-    const hemi = new THREE.HemisphereLight(0xd8d8d8, 0x1a1a1a, 0.55);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0xd8d8d8, 0x1a1a1a, 0.55);
+    this.scene.add(this.hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(0xf5f5f5, 0.95);
-    keyLight.position.set(2.5, 4.5, 2.2);
-    keyLight.castShadow = !this.isSoftwareGl;
-    keyLight.shadow.mapSize.width = 1024;
-    keyLight.shadow.mapSize.height = 1024;
-    keyLight.shadow.camera.near = 0.5;
-    keyLight.shadow.camera.far = 16;
-    keyLight.shadow.camera.left = -6;
-    keyLight.shadow.camera.right = 6;
-    keyLight.shadow.camera.top = 6;
-    keyLight.shadow.camera.bottom = -6;
-    keyLight.shadow.bias = -0.0005;
-    this.scene.add(keyLight);
+    this.keyLight = new THREE.DirectionalLight(0xf5f5f5, 0.95);
+    this.keyLight.position.set(2.5, 4.5, 2.2);
+    this.keyLight.castShadow = !this.isSoftwareGl;
+    this.keyLight.shadow.mapSize.width = 1024;
+    this.keyLight.shadow.mapSize.height = 1024;
+    this.keyLight.shadow.camera.near = 0.5;
+    this.keyLight.shadow.camera.far = 16;
+    this.keyLight.shadow.camera.left = -6;
+    this.keyLight.shadow.camera.right = 6;
+    this.keyLight.shadow.camera.top = 6;
+    this.keyLight.shadow.camera.bottom = -6;
+    this.keyLight.shadow.bias = -0.0005;
+    this.scene.add(this.keyLight);
 
-    const rimFill = new THREE.PointLight(0xd0d0d0, 0.4, 10, 2);
-    rimFill.position.set(-2.2, 2.3, -1.8);
-    this.scene.add(rimFill);
+    this.rimFill = new THREE.PointLight(0xd0d0d0, 0.4, 10, 2);
+    this.rimFill.position.set(-2.2, 2.3, -1.8);
+    this.scene.add(this.rimFill);
+
+    // Pre-allocated peripheral shadow silhouette plane (feathered radial black shadow)
+    this.peripheralShadowMat = new THREE.MeshBasicMaterial({
+      map: createSoftShadowTexture(),
+      color: 0x030303,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.peripheralShadowMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.95, 2.15),
+      this.peripheralShadowMat,
+    );
+    this.peripheralShadowMesh.visible = false;
+    this.scene.add(this.peripheralShadowMesh);
 
     // Shared monochrome materials
     const plasterTex = createMonochromePlasterTexture(1.1, 3, 2);
@@ -654,6 +764,116 @@ export class ThresholdRoomRenderer {
       this.scene.fog.density = 0.085 + compressionFactor * 0.065;
     }
     this.renderer.toneMappingExposure = 1.05 - compressionFactor * 0.16;
+  }
+
+  public triggerCameraPunch(durationSec = 0.28) {
+    this.cameraPunchAge = 0;
+    this.cameraPunchDuration = durationSec;
+  }
+
+  public triggerShadowAnomaly(kind: VisualAnomalyKind, azimuthDeg: number) {
+    this.anomalyKind = kind;
+    this.anomalyAge = 0;
+    this.anomalyDuration =
+      kind === 'blackout'
+        ? 0.85
+        : kind === 'brownout'
+          ? 0.65
+          : kind === 'peripheral_dart'
+            ? 1.35
+            : 2.1;
+    this.anomalyStartAngle = this.playerYaw - (azimuthDeg * Math.PI) / 180;
+    this.anomalySweepDir = azimuthDeg >= 0 ? 1 : -1;
+  }
+
+  private updateShadowAnomalies(dt: number, elapsedSec: number) {
+    // Subtle slow shadow-direction drift so wall/furniture shadows creep over time
+    this.keyLight.position.x = 2.4 + Math.sin(elapsedSec * 0.14) * 1.1;
+    this.keyLight.position.z = 2.0 + Math.cos(elapsedSec * 0.11) * 1.1;
+
+    // Update desktop camera FOV / micro-shake punch (skipped in XR so HMD pose stays 100% locked)
+    if (!this.xrSession && this.cameraPunchDuration > 0) {
+      this.cameraPunchAge += dt;
+      const p = Math.min(1, this.cameraPunchAge / this.cameraPunchDuration);
+      const kick = Math.sin(p * Math.PI) * (1 - p);
+      this.camera.fov = 68 + kick * 11;
+      this.camera.updateProjectionMatrix();
+      if (p >= 1) {
+        this.cameraPunchDuration = 0;
+        this.camera.fov = 68;
+        this.camera.updateProjectionMatrix();
+      }
+    }
+
+    if (!this.anomalyKind) {
+      this.keyLight.intensity = 0.95;
+      this.hemiLight.intensity = 0.55;
+      this.rimFill.intensity = 0.4;
+      this.peripheralShadowMesh.visible = false;
+      this.peripheralShadowMat.opacity = 0;
+      return;
+    }
+
+    this.anomalyAge += dt;
+    const t = Math.min(1, this.anomalyAge / Math.max(0.1, this.anomalyDuration));
+
+    if (this.anomalyKind === 'blackout') {
+      // 0.45s pitch blackout, then harsh high-contrast flash onto framed entity
+      if (t < 0.52) {
+        this.keyLight.intensity = 0.01;
+        this.hemiLight.intensity = 0.02;
+        this.rimFill.intensity = 0.0;
+      } else if (t < 0.72) {
+        this.keyLight.intensity = 2.35;
+        this.hemiLight.intensity = 0.72;
+        this.rimFill.intensity = 0.85;
+      } else {
+        this.keyLight.intensity = 0.95;
+        this.hemiLight.intensity = 0.55;
+        this.rimFill.intensity = 0.4;
+      }
+    } else if (this.anomalyKind === 'brownout') {
+      // Double sputter dip (bulb brownout) then steady recovery
+      const dip =
+        t < 0.25
+          ? 0.18
+          : t < 0.42
+            ? 0.82
+            : t < 0.68
+              ? 0.11
+              : 0.95;
+      this.keyLight.intensity = dip;
+      this.hemiLight.intensity = 0.2 + dip * 0.35;
+      this.rimFill.intensity = dip < 0.3 ? 0.08 : 0.4;
+    } else if (this.anomalyKind === 'peripheral_dart' || this.anomalyKind === 'shadow_crawl') {
+      const dist = this.anomalyKind === 'shadow_crawl' ? 1.85 : 2.35;
+      const angle = this.anomalyStartAngle + this.anomalySweepDir * (t * 0.36);
+      const heightY = this.anomalyKind === 'shadow_crawl' ? 0.55 : 1.15;
+
+      this.peripheralShadowMesh.visible = true;
+      this.peripheralShadowMesh.position.set(
+        this.playerPos.x - Math.sin(angle) * dist,
+        heightY,
+        this.playerPos.z - Math.cos(angle) * dist,
+      );
+      this.peripheralShadowMesh.lookAt(this.playerPos.x, heightY, this.playerPos.z);
+      this.peripheralShadowMesh.scale.set(
+        this.anomalyKind === 'shadow_crawl' ? 1.5 : 0.85,
+        this.anomalyKind === 'shadow_crawl' ? 0.45 : 1.05,
+        1,
+      );
+      // Fade cleanly in & out so it reads like a trick of the eye or shifting shadow
+      this.peripheralShadowMat.opacity = Math.sin(t * Math.PI) * 0.72;
+    }
+
+    if (this.anomalyAge >= this.anomalyDuration) {
+      this.anomalyKind = null;
+      this.keyLight.intensity = 0.95;
+      this.hemiLight.intensity = 0.55;
+      this.rimFill.intensity = 0.4;
+      this.peripheralShadowMesh.visible = false;
+      this.peripheralShadowMat.opacity = 0;
+    }
   }
 
   public setVirtualMove(forward: number, strafe: number, turn: number) {
@@ -1017,15 +1237,24 @@ export class ThresholdRoomRenderer {
     this.callbacksRef.current.onPoseUpdate(
       { x: this.playerPos.x, y: this.playerPos.y, z: this.playerPos.z },
       this.playerYaw,
+      this.playerPitch,
     );
   }
 
   private syncCameraPose() {
     this.camera.position.copy(this.playerPos);
     this.camera.rotation.order = 'YXZ';
+    let shakePitch = 0;
+    let shakeRoll = 0;
+    if (!this.xrSession && this.cameraPunchDuration > 0) {
+      const p = Math.min(1, this.cameraPunchAge / this.cameraPunchDuration);
+      const env = 1 - p;
+      shakePitch = Math.sin(p * 42) * 0.032 * env;
+      shakeRoll = Math.cos(p * 37) * 0.026 * env;
+    }
     this.camera.rotation.y = this.playerYaw;
-    this.camera.rotation.x = this.playerPitch;
-    this.camera.rotation.z = 0;
+    this.camera.rotation.x = this.playerPitch + shakePitch;
+    this.camera.rotation.z = shakeRoll;
   }
 
   private syncWebXRPlanesAndOcclusion(frame: XRFrameWithDetection, refSpace: XRReferenceSpace) {
@@ -1143,6 +1372,7 @@ export class ThresholdRoomRenderer {
         this.callbacksRef.current.onPoseUpdate(
           { x: this.playerPos.x, y: this.playerPos.y, z: this.playerPos.z },
           this.playerYaw,
+          _xrEuler.x,
         );
       }
 
@@ -1168,6 +1398,7 @@ export class ThresholdRoomRenderer {
 
     if (this.gameState === 'playing') {
       this.updateThreatVisuals(time / 1000);
+      this.updateShadowAnomalies(dt, time / 1000);
     }
     this.renderer.render(this.scene, this.camera);
   };
@@ -1178,8 +1409,16 @@ export class ThresholdRoomRenderer {
       if (!entry) continue;
       const m = threat.manifestation;
 
-      if (entry.archetype === 'WallPeel') {
-        // Starts flattened like a damp wall shadow, slowly peels outward in Z depth
+      if (entry.archetype === 'FaceAssault') {
+        entry.group.position.set(threat.position.x, threat.position.y, threat.position.z);
+        entry.group.rotation.y = Math.atan2(threat.normal.x, threat.normal.z);
+        const pulse = 1 + Math.sin(elapsedSec * 28) * 0.035;
+        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.65, 1.08 * pulse, m));
+      } else if (entry.archetype === 'InterceptStalker') {
+        entry.group.position.set(threat.position.x, 0, threat.position.z);
+        entry.group.rotation.y = Math.atan2(threat.normal.x, threat.normal.z);
+        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.82, 1.05, m));
+      } else if (entry.archetype === 'WallPeel') {
         const depthScale = THREE.MathUtils.lerp(0.05, 1.0, m);
         entry.group.scale.set(1, THREE.MathUtils.lerp(0.85, 1.06, m), depthScale);
         entry.group.position.set(
@@ -1188,7 +1427,6 @@ export class ThresholdRoomRenderer {
           threat.position.z + threat.normal.z * (m * 0.16),
         );
       } else if (entry.archetype === 'UnderVoidCrawler') {
-        // Creeps forward slightly out from beneath furniture shadow
         entry.group.position.set(
           threat.position.x + threat.normal.x * (m * 0.48),
           0,
@@ -1205,7 +1443,6 @@ export class ThresholdRoomRenderer {
         );
         entry.group.rotation.z = Math.sin(elapsedSec * 0.9) * 0.03;
       } else {
-        // DoorwayPeeker / CornerWatcher lean slightly outward along normal
         entry.group.position.set(
           threat.position.x + threat.normal.x * (m * 0.18),
           0,
@@ -1238,6 +1475,7 @@ export class ThresholdRoomRenderer {
     } else if (this.gameState === 'playing') {
       this.updatePlayer(dt);
       this.updateThreatVisuals(now / 1000);
+      this.updateShadowAnomalies(dt, now / 1000);
     }
 
     this.renderer.render(this.scene, this.camera);

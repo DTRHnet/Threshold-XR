@@ -62,6 +62,9 @@ export default function App() {
   const [webcamEnabled, setWebcamEnabled] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(false);
   const [capabilityNotice, setCapabilityNotice] = useState<string | null>(null);
+  const [httpsAppUrl, setHttpsAppUrl] = useState<string | null>(null);
+  const isSecureContextReady =
+    typeof window !== 'undefined' ? window.isSecureContext : true;
 
   const [gameState, setGameState] = useState<GameState>('title');
   const [blueprintOpen, setBlueprintOpen] = useState<boolean>(false);
@@ -114,7 +117,7 @@ export default function App() {
     rendererRef.current?.setGameState(gameState);
   }, [gameState]);
 
-  // Check WebXR immersive-ar capability on mount
+  // Check WebXR immersive-ar capability and HTTPS app URL on mount
   useEffect(() => {
     if (typeof navigator !== 'undefined' && navigator.xr) {
       navigator.xr
@@ -124,6 +127,15 @@ export default function App() {
     } else {
       setXrSupported(false);
     }
+
+    fetch('/api/health')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { appUrl?: string | null } | null) => {
+        if (data?.appUrl && data.appUrl.startsWith('https://')) {
+          setHttpsAppUrl(data.appUrl);
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   const requestAiRoomAnalysis = useCallback(
@@ -359,12 +371,13 @@ export default function App() {
 
 
   const rendererCallbacksRef = useRef<RendererCallbacks>({
-    onPoseUpdate: (pos: Vec3, yawRad: number) => {
+    onPoseUpdate: (pos: Vec3, yawRad: number, pitchRad: number) => {
       attentionRef.current = updateAttention(
         attentionRef.current,
         pos,
         yawRad,
         elapsedRef.current,
+        pitchRad,
       );
     },
     onXrPlanesUpdated: (planes: DetectedPlaneSnapshot[]) => {
@@ -464,6 +477,45 @@ export default function App() {
         );
       }
 
+      audioRef.current?.setTensionState(
+        tickRes.tensionTelemetry.tensionLevel,
+        tickRes.tensionTelemetry.nearestThreatAngleDeg,
+        tickRes.tensionTelemetry.stillnessSeconds,
+        tickRes.tensionTelemetry.hasActiveThreat,
+      );
+
+      if (tickRes.visualAnomalyToTrigger) {
+        rendererRef.current?.triggerShadowAnomaly(
+          tickRes.visualAnomalyToTrigger.kind,
+          tickRes.visualAnomalyToTrigger.azimuthDeg,
+        );
+        if (tickRes.visualAnomalyToTrigger.kind === 'brownout') {
+          audioRef.current?.playPowerHumFlicker();
+        } else if (tickRes.visualAnomalyToTrigger.kind === 'blackout') {
+          audioRef.current?.playPreScareRise();
+        }
+      }
+
+      if (tickRes.scareImpactToTrigger) {
+        const impact = tickRes.scareImpactToTrigger;
+        const delay = impact.kind === 'blackout_reveal' ? 0.44 : 0;
+        audioRef.current?.playScareImpact(
+          impact.kind,
+          impact.intensity,
+          impact.azimuthDeg,
+          delay,
+        );
+        if (impact.cameraPunch) {
+          if (delay > 0) {
+            window.setTimeout(() => {
+              rendererRef.current?.triggerCameraPunch(0.28);
+            }, delay * 1000);
+          } else {
+            rendererRef.current?.triggerCameraPunch(0.28);
+          }
+        }
+      }
+
       if (tickRes.audioBaitToTrigger) {
         audioRef.current?.playSpatialCue(
           tickRes.audioBaitToTrigger.azimuthDeg,
@@ -560,6 +612,8 @@ export default function App() {
           xrSupported={xrSupported}
           onEnterWebXR={enterWebXRPassthrough}
           capabilityNotice={capabilityNotice}
+          isSecureContextReady={isSecureContextReady}
+          httpsAppUrl={httpsAppUrl}
           sensitivityDb={sensitivityDb}
           onChangeSensitivity={setSensitivityDb}
           aiSourceLabel={

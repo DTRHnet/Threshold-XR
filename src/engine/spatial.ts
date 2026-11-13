@@ -177,7 +177,15 @@ export function createInitialAttention(
     sectors,
     playerPosition: { ...spawnPos },
     playerYawRad: spawnYawRad,
+    pitchRad: 0,
     angularVelocityRadPerSec: 0,
+    signedYawVelocityRadPerSec: 0,
+    pitchVelocityRadPerSec: 0,
+    predictedYawRad: spawnYawRad,
+    movementSpeedMps: 0,
+    moveDirX: 0,
+    moveDirZ: 0,
+    history: [{ timeSec: nowSec, yawRad: spawnYawRad, pitchRad: 0 }],
     lastUpdateSec: nowSec,
   };
 }
@@ -228,10 +236,42 @@ export function updateAttention(
   playerPos: Vec3,
   playerYawRad: number,
   nowSec: number,
+  pitchRad = 0,
 ): AttentionState {
   const dt = Math.max(0.001, nowSec - prev.lastUpdateSec);
-  const deltaYaw = Math.abs(normalizeAngleRad(playerYawRad - prev.playerYawRad));
-  const angularVelocityRadPerSec = deltaYaw / dt;
+  const deltaYaw = normalizeAngleRad(playerYawRad - prev.playerYawRad);
+  const deltaPitch = pitchRad - prev.pitchRad;
+  const instantSignedYawVel = deltaYaw / dt;
+  const pitchVelocityRadPerSec = deltaPitch / dt;
+
+  // Maintain ~0.9s camera orientation history for stable turn-direction prediction (100-300ms ahead)
+  const history = prev.history
+    .filter((sample) => nowSec - sample.timeSec <= 0.9)
+    .concat({ timeSec: nowSec, yawRad: playerYawRad, pitchRad });
+
+  let signedYawVelocityRadPerSec = instantSignedYawVel;
+  if (history.length >= 2) {
+    const windowAnchor =
+      history.find((s) => nowSec - s.timeSec <= 0.25) ?? history[0];
+    const windowDt = nowSec - windowAnchor.timeSec;
+    if (windowDt >= 0.04) {
+      const windowDeltaYaw = normalizeAngleRad(playerYawRad - windowAnchor.yawRad);
+      // Blend window turn trend with instantaneous velocity for crisp intercept response
+      signedYawVelocityRadPerSec =
+        (windowDeltaYaw / windowDt) * 0.65 + instantSignedYawVel * 0.35;
+    }
+  }
+
+  const angularVelocityRadPerSec = Math.abs(signedYawVelocityRadPerSec);
+  const leadOffset = Math.max(-0.8, Math.min(0.8, signedYawVelocityRadPerSec * 0.22));
+  const predictedYawRad = normalizeAngleRad(playerYawRad + leadOffset);
+
+  const mdx = playerPos.x - prev.playerPosition.x;
+  const mdz = playerPos.z - prev.playerPosition.z;
+  const moveDist = Math.hypot(mdx, mdz);
+  const movementSpeedMps = moveDist / dt;
+  const moveDirX = moveDist > 0.002 ? mdx / moveDist : prev.moveDirX;
+  const moveDirZ = moveDist > 0.002 ? mdz / moveDist : prev.moveDirZ;
 
   // Player heading azimuth in [-PI, PI]
   const fwd = yawToForward(playerYawRad);
@@ -254,7 +294,15 @@ export function updateAttention(
     sectors,
     playerPosition: { ...playerPos },
     playerYawRad,
+    pitchRad,
     angularVelocityRadPerSec,
+    signedYawVelocityRadPerSec,
+    pitchVelocityRadPerSec,
+    predictedYawRad,
+    movementSpeedMps,
+    moveDirX,
+    moveDirZ,
+    history,
     lastUpdateSec: nowSec,
   };
 }

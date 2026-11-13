@@ -15,6 +15,8 @@ interface TitleScreenProps {
   xrSupported: boolean | null;
   onEnterWebXR: () => void;
   capabilityNotice: string | null;
+  isSecureContextReady: boolean;
+  httpsAppUrl: string | null;
   sensitivityDb: number;
   onChangeSensitivity: (val: number) => void;
   aiSourceLabel: string;
@@ -48,6 +50,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   xrSupported,
   onEnterWebXR,
   capabilityNotice,
+  isSecureContextReady,
+  httpsAppUrl,
   sensitivityDb,
   onChangeSensitivity,
   aiSourceLabel,
@@ -212,12 +216,23 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             </label>
           </div>
 
-          {capabilityNotice && (
+          {(!isSecureContextReady || capabilityNotice) && (
             <div
               role="status"
-              className="mt-3 border border-white/20 bg-black px-3 py-2 text-xs text-neutral-200"
+              className="mt-3 flex flex-wrap items-center justify-between gap-2 border border-white/20 bg-black px-3 py-2 text-xs text-neutral-200"
             >
-              {capabilityNotice}
+              <span>
+                {capabilityNotice ??
+                  'Plain HTTP blocks WebXR & Mic. Open via HTTPS (or run npm run dev:https / adb reverse tcp:3000 tcp:3000 -> http://localhost:3000).'}
+              </span>
+              {!isSecureContextReady && httpsAppUrl && (
+                <a
+                  href={httpsAppUrl}
+                  className="border border-white/40 px-2 py-1 font-medium text-white hover:bg-white hover:text-black whitespace-nowrap"
+                >
+                  Switch to HTTPS
+                </a>
+              )}
             </div>
           )}
 
