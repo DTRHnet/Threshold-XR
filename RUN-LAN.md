@@ -81,6 +81,29 @@ Notes:
   work.
 - Run the HTTPS instance on `PORT=3000` at the same time if you want both paths available.
 
+## 6. Verifying on the headset without seeing it
+
+The Quest Browser exposes a Chrome DevTools socket, which makes real verification possible
+without a screenshot:
+
+```bash
+adb forward tcp:9222 localabstract:chrome_devtools_remote
+curl -s http://127.0.0.1:9222/json | head -40     # list tabs + webSocketDebuggerUrl
+```
+
+Then drive it over CDP (`Runtime.evaluate`, `Input.dispatchMouseEvent`,
+`Page.captureScreenshot`). Two gotchas learned the hard way:
+
+- `navigator.xr.isSessionSupported()` **never settles while the page is hidden**
+  (`document.visibilityState === 'hidden'`, i.e. the browser panel is not displayed), so
+  `enterWebXRPassthrough()` awaits forever and the AR button silently does nothing.
+- `isSessionSupported('immersive-ar')` also returns **false while the headset is off-head**
+  (`mWakefulness=Asleep`), because Quest suspends XR when nobody is wearing it. Waking it
+  with `adb shell input keyevent KEYCODE_WAKEUP` is not enough; it has to be worn.
+- Old tabs persist and will happily serve a stale bundle — check
+  `document.querySelector('script[type=module]').src` against `dist/assets/` when a change
+  seems to have no effect.
+
 ## Notes
 
 - The HUD stays on screen only if the browser supports the optional `dom-overlay` feature.

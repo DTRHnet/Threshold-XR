@@ -26,6 +26,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Outcome copy is honest about why you lost.** `RunSummary.cause` now records
+  `'strike'` vs `'acoustic'`. Being reached shows *PROXIMITY BREACH — It reached you.*
+  instead of the acoustic-vocalisation message, which was simply wrong when an entity
+  grabbed you.
+- **The rule is on the title screen**: "Watch them — look away and they close in".
+  An unexplained instant-death mechanic reads as a bug, not as fear.
 - Threat rendering uses the stalking position rather than the fixed spawn slot, so
   WallPeel / crawler / etc. peel off their surfaces and advance.
 - `getNearestThreatDistance()` exposes the closest entity for proximity effects.

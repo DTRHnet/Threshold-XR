@@ -85,25 +85,30 @@ export const OutcomeOverlay: React.FC<OutcomeOverlayProps> = ({
   }
 
   const broke = summary.outcome === 'broke';
+  // Being reached by an entity is a different failure from losing your silence, and
+  // telling the player they vocalised when something grabbed them is just wrong.
+  const struck = broke && summary.cause === 'strike';
 
   return (
     <div
       className="fixed inset-0 z-30 flex items-center justify-center bg-black p-6"
       role="dialog"
       aria-modal="true"
-      aria-label={broke ? 'Vocalization Detected' : 'Duration Complete'}
+      aria-label={struck ? 'It Reached You' : broke ? 'Vocalization Detected' : 'Duration Complete'}
     >
       <div className="w-full max-w-md border border-white/20 bg-[#080808] p-8 text-white">
         <div className="font-mono-tabular text-xs tracking-widest text-neutral-400">
-          {broke ? 'VOCALIZATION DETECTED' : 'DURATION COMPLETE'}
+          {struck ? 'PROXIMITY BREACH' : broke ? 'VOCALIZATION DETECTED' : 'DURATION COMPLETE'}
         </div>
         <h2 className="mt-2 text-3xl font-bold tracking-tight text-white">
-          {broke ? 'You broke.' : 'Silence maintained.'}
+          {struck ? 'It reached you.' : broke ? 'You broke.' : 'Silence maintained.'}
         </h2>
         <p className="mt-2 text-xs leading-relaxed text-neutral-400">
-          {broke
-            ? 'Acoustic monitoring registered a sustained high-band vocal reaction.'
-            : 'All manifestations cleared. The room yielded zero acoustic breach.'}
+          {struck
+            ? 'An entity closed the distance while it was outside your view. Anything you stop watching keeps coming.'
+            : broke
+              ? 'Acoustic monitoring registered a sustained high-band vocal reaction.'
+              : 'All manifestations cleared. The room yielded zero acoustic breach.'}
         </p>
 
         <div className="mt-6 grid grid-cols-3 gap-3 border-y border-white/15 py-4">

@@ -191,6 +191,8 @@ export interface AcousticState {
 
 export interface RunSummary {
   outcome: 'survived' | 'broke';
+  /** Which path ended the run, so the outcome screen can tell the truth. */
+  cause?: 'acoustic' | 'strike';
   elapsedSec: number;
   targetSec: number;
   roomName: string;

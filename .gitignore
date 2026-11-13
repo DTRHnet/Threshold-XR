@@ -11,3 +11,7 @@ coverage/
 .certs/
 mkcert
 .chrome-profile/
+
+# On-device DevTools verification helpers (local only)
+.cdp.py
+.arauto.py

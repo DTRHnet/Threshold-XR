@@ -96,7 +96,9 @@ export default function App() {
   const seenThreatIdsRef = useRef<Set<string>>(new Set());
   // Assigned from the triggerOutcome callback so renderer callbacks (created once)
   // can end a run without capturing a stale closure.
-  const triggerOutcomeRef = useRef<(outcome: 'survived' | 'broke') => void>(() => {});
+  const triggerOutcomeRef = useRef<
+    (outcome: 'survived' | 'broke', cause?: 'acoustic' | 'strike') => void
+  >(() => {});
   const flashTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -213,7 +215,7 @@ export default function App() {
     );
   }, [baseRoom, baseSlots, xrActive, requestAiRoomAnalysis]);
 
-  const triggerOutcome = useCallback((outcome: 'survived' | 'broke') => {
+  const triggerOutcome = useCallback((outcome: 'survived' | 'broke', cause?: 'acoustic' | 'strike') => {
     flashTimersRef.current.forEach((id) => window.clearTimeout(id));
     flashTimersRef.current = [];
 
@@ -222,6 +224,7 @@ export default function App() {
 
     const snap: RunSummary = {
       outcome,
+      cause,
       elapsedSec: elapsedRef.current,
       targetSec: durationRef.current,
       roomName: roomRef.current.name,
@@ -375,7 +378,7 @@ export default function App() {
     peakDbRef.current = Math.max(peakDbRef.current, acState.lastDbRel);
     setDbRel(acState.lastDbRel);
     if (acState.breachTriggered) {
-      triggerOutcome('broke');
+      triggerOutcome('broke', 'acoustic');
     }
   }, [triggerOutcome]);
 
@@ -386,7 +389,7 @@ export default function App() {
       // without a consequence, being stalked is just scenery.
       audioRef.current?.playScareImpact('face_stinger', 1, azimuthDeg, 0);
       rendererRef.current?.triggerCameraPunch(0.45);
-      triggerOutcomeRef.current('broke');
+      triggerOutcomeRef.current('broke', 'strike');
     },
     onPoseUpdate: (pos: Vec3, yawRad: number, pitchRad: number) => {
       attentionRef.current = updateAttention(
@@ -468,7 +471,7 @@ export default function App() {
         peakDbRef.current = Math.max(peakDbRef.current, acState.lastDbRel);
         setDbRel(acState.lastDbRel);
         if (acState.breachTriggered) {
-          triggerOutcome('broke');
+          triggerOutcome('broke', 'acoustic');
           return;
         }
       }

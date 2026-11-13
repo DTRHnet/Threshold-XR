@@ -253,7 +253,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
 
         {/* Clean single-line control hint */}
         <div className="text-xs text-neutral-400 pointer-events-none">
-          Headset 6DoF / Drag Look · Sit Still &amp; Stay Silent · P Pause · Enter Start
+          Watch them — look away and they close in · Headset 6DoF / Drag Look · P Pause · Enter Start
         </div>
       </div>
     </div>
