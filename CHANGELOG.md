@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shadow map type deprecated on Quest**: `shadowMap.type` was set to
+  `THREE.PCFSoftShadowMap`, whose implementation three r187 removed. Every run logged
+  `THREE.WebGLShadowMap: PCFSoftShadowMap has been removed. Using PCFShadowMap instead.`
+  and silently downgraded. Now requests `THREE.PCFShadowMap` directly.
+
+### Verified on device
+
+- Confirmed on a Quest 2 (OculusBrowser 157 / Chrome 157) over the `adb reverse` tunnel:
+  `window.isSecureContext === true` on plain `http://localhost`, `navigator.xr` present,
+  and `navigator.xr.isSessionSupported('immersive-ar') === true`.
+- Note for anyone testing via DevTools: `isSessionSupported()` never settles while the page
+  is `document.visibilityState === 'hidden'` (browser panel not displayed), so
+  `enterWebXRPassthrough()` awaits forever and the button appears to do nothing with no
+  capability notice. The browser panel has to be visible in the headset first.
+
 ## [0.1.0] - 2026-11-12
 
 Headset bring-up pass: the build now actually runs in passthrough AR on a Quest 2, and the
