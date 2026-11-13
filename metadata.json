@@ -1,0 +1,6 @@
+{
+  "name": "THRESHOLD",
+  "description": "Black-and-white passthrough AR endurance horror using AI spatial threat placement and acoustic shriek detection.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

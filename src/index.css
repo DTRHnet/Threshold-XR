@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --font-display: 'Archivo', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --surface-0: #050505;
+  --surface-1: #0c0c0c;
+  --surface-2: #141414;
+  --ink-primary: #f2f2f2;
+  --ink-muted: #9a9a9a;
+  --hairline: rgba(255, 255, 255, 0.14);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--surface-0);
+  color: var(--ink-primary);
+  font-family: var(--font-display);
+  overflow: hidden;
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle analog film grain & cold vignette overlay (compositor-safe, pointer-events none) */
+.film-grain-overlay {
+  background-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 45%,
+      rgba(0, 0, 0, 0.72) 100%
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.015) 0px,
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-grain {
+    animation: none !important;
+  }
+}
