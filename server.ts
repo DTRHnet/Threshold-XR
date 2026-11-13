@@ -25,7 +25,7 @@ import type {
 } from './src/engine/types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 const aiClient = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({
@@ -308,15 +308,26 @@ async function startServer() {
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('/{*splat}', (_req, res) => {
+    // Express 4 (path-to-regexp v0) needs '*' for the catch-all; '/{*splat}' is Express 5 syntax.
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   if (process.env.HTTPS === '1') {
-    const keyPath = process.env.SSL_KEY_PATH || path.join(os.tmpdir(), 'threshold-dev-key.pem');
-    const certPath = process.env.SSL_CERT_PATH || path.join(os.tmpdir(), 'threshold-dev-cert.pem');
+    // Prefer locally trusted mkcert material (SANs cover the LAN IP), so a headset can
+    // trust the CA once and keep a real secure context for WebXR.
+    const keyPath = process.env.SSL_KEY_PATH || path.resolve(__dirname, '.certs/lan-key.pem');
+    const certPath = process.env.SSL_CERT_PATH || path.resolve(__dirname, '.certs/lan.pem');
     if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+      // Browsers ignore CN entirely and require a SAN, and WebXR needs the LAN IP covered.
+      const sanEntries = ['DNS:localhost', 'IP:127.0.0.1'];
+      for (const addrs of Object.values(os.networkInterfaces())) {
+        for (const addr of addrs ?? []) {
+          if (addr.family === 'IPv4' && !addr.internal) sanEntries.push(`IP:${addr.address}`);
+        }
+      }
+      fs.mkdirSync(path.dirname(keyPath), { recursive: true });
       execFileSync(
         'openssl',
         [
@@ -332,21 +343,35 @@ async function startServer() {
           '30',
           '-nodes',
           '-subj',
-          '/CN=localhost',
+          '/CN=threshold-dev',
+          '-addext',
+          `subjectAltName=${sanEntries.join(',')}`,
         ],
         { stdio: 'ignore' },
       );
+      console.warn(`[TLS] Generated self-signed cert for ${sanEntries.join(', ')}`);
+      console.warn('[TLS] The headset will show a warning for this cert; use mkcert (see RUN-LAN.md) to avoid it.');
     }
     const creds = {
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath),
     };
     https.createServer(creds, app).listen(PORT, '0.0.0.0', () => {
-      console.log(`THRESHOLD server listening on https://0.0.0.0:${PORT}`);
+      console.log(`THRESHOLD server listening on https://0.0.0.0:${PORT} (WebXR secure context)`);
+      console.log(`  local : https://localhost:${PORT}`);
+      for (const addrs of Object.values(os.networkInterfaces())) {
+        for (const addr of addrs ?? []) {
+          if (addr.family === 'IPv4' && !addr.internal) {
+            console.log(`  LAN   : https://${addr.address}:${PORT}`);
+          }
+        }
+      }
     });
   } else {
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`THRESHOLD server listening on http://0.0.0.0:${PORT}`);
+      console.warn(
+        `THRESHOLD server listening on http://0.0.0.0:${PORT} — WebXR needs HTTPS (set HTTPS=1).`,
+      );
     });
   }
 }

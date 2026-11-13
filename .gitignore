@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local TLS material for WebXR over LAN — contains the CA private key. NEVER commit.
+.certs/
+mkcert
+.chrome-profile/
