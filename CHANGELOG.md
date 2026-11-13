@@ -76,5 +76,5 @@ experience has atmosphere, motion and a much shorter wait before the first scare
 - Not verified in this pass: the in-headset immersive session, `dom-overlay` HUD support,
   and the subjective mix level of the new audio/visuals — these need a real headset.
 
-[Unreleased]: https://github.com/dtrhnet/threshold-xr/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/dtrhnet/threshold-xr/releases/tag/v0.1.0
+[Unreleased]: https://github.com/DTRHnet/Threshold-XR/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DTRHnet/Threshold-XR/releases/tag/v0.1.0
