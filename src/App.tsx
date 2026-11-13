@@ -94,6 +94,9 @@ export default function App() {
   const peakDbRef = useRef<number>(0);
   const highestPhaseRef = useRef<HorrorPhase>('Baseline');
   const seenThreatIdsRef = useRef<Set<string>>(new Set());
+  // Assigned from the triggerOutcome callback so renderer callbacks (created once)
+  // can end a run without capturing a stale closure.
+  const triggerOutcomeRef = useRef<(outcome: 'survived' | 'broke') => void>(() => {});
   const flashTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -242,6 +245,10 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    triggerOutcomeRef.current = triggerOutcome;
+  }, [triggerOutcome]);
+
   const startRun = useCallback(() => {
     flashTimersRef.current.forEach((id) => window.clearTimeout(id));
     flashTimersRef.current = [];
@@ -374,6 +381,13 @@ export default function App() {
 
 
   const rendererCallbacksRef = useRef<RendererCallbacks>({
+    onThreatStrike: (azimuthDeg: number) => {
+      // Something reached you while you weren't looking. Losing here is the point:
+      // without a consequence, being stalked is just scenery.
+      audioRef.current?.playScareImpact('face_stinger', 1, azimuthDeg, 0);
+      rendererRef.current?.triggerCameraPunch(0.45);
+      triggerOutcomeRef.current('broke');
+    },
     onPoseUpdate: (pos: Vec3, yawRad: number, pitchRad: number) => {
       attentionRef.current = updateAttention(
         attentionRef.current,
@@ -492,6 +506,10 @@ export default function App() {
           (tickRes.state.progress - 0.88) / 0.12,
         );
       }
+
+      audioRef.current?.setThreatProximity(
+        rendererRef.current?.getNearestThreatDistance() ?? Infinity,
+      );
 
       audioRef.current?.setTensionState(
         tickRes.tensionTelemetry.tensionLevel,

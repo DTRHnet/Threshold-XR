@@ -46,6 +46,14 @@ USB `adb reverse` path that avoids certificates entirely — see **[RUN-LAN.md](
 
 ## Playing
 
+**The rule that keeps you alive: anything you look away from walks toward you.** Entities
+freeze inside a 42° cone around your gaze and creep toward you outside it, closing faster
+as the run progresses. If one reaches you, the run ends. With two live at once you cannot
+watch both — that conflict is the game.
+
+Listen for it: breathing rises as something closes, the room ducks to near-silence just
+before it arrives, and your heartbeat climbs as it gets near.
+
 | Input | Action |
 |---|---|
 | `Enter` / `Space` (title) | Start a run |
@@ -77,6 +85,9 @@ src/components/           Title screen, HUD, blueprint modal, outcome overlay
 
 ### Tuning
 
+- **Stalking pressure** — `src/three/RoomRenderer.ts`: `STRIKE_DISTANCE` (how close it may
+  get), `WATCHED_CONE_DEG` (the freeze cone — keep it wider than the camera half-FOV so
+  nothing advances while visible), and the speed ramp inside `updateThreatApproach()`.
 - **Entity silhouettes** — `src/three/threatRigs.ts`. Each threat is a list of named parts
   (shape, material, transform). Raise `segments` for smoother surfaces, swap shapes, or set
   a rig's `modelUrl` to substitute a real mesh later. Animation addresses parts by name, so

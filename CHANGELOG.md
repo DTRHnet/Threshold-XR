@@ -7,6 +7,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Stalking mechanic — entities now come for you.** Each active entity keeps a live
+  position that creeps toward the player whenever it is outside a 42° cone around the
+  view direction, and freezes the moment it is looked at. Speed ramps from 0.10 m/s to
+  0.38 m/s across a run. Reaching `STRIKE_DISTANCE` (0.85 m) while unobserved fires
+  `RendererCallbacks.onThreatStrike`, which punches the camera, plays a face stinger and
+  **ends the run**. With two entities live you cannot watch both, which is the tension.
+  Measured: ignoring one at 2.5 m costs you the run in 14 s; glancing away 2 s in every
+  5 s buys ~30 s; near-continuous watching ~50 s. Guards: an entity must be fully
+  manifested (≥0.8) and alive ≥2.5 s before it can strike, so nothing spawns on top of
+  you and instantly kills you.
+- **Proximity audio**: `setThreatProximity(distance)` drives a breathing layer that rises
+  sharply as something closes, ducks the whole ambience to near-silence as it arrives
+  (the silence is the warning), and ramps a heartbeat from ~0.9 Hz to ~3.3 Hz.
+- Entities now always turn to face the player.
+
+### Changed
+
+- Threat rendering uses the stalking position rather than the fixed spawn slot, so
+  WallPeel / crawler / etc. peel off their surfaces and advance.
+- `getNearestThreatDistance()` exposes the closest entity for proximity effects.
+
 ### Fixed
 
 - **Shadow map type deprecated on Quest**: `shadowMap.type` was set to

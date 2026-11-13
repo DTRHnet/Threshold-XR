@@ -36,6 +36,9 @@ export class HorrorAudioEngine {
   private atmosphereSubGain: GainNode | null = null;
   private atmosphereWindGain: GainNode | null = null;
   private atmosphereDroneBreath: GainNode | null = null;
+  private atmosphereBreathGain: GainNode | null = null;
+  private proximity = 0;
+  private lastProximityPulseMs = 0;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -295,7 +298,38 @@ export class HorrorAudioEngine {
     breathLfo.start();
     this.atmosphereOscNodes.push(breathLfo);
 
-    // --- Layer C: distant room events --------------------------------------
+    // --- Layer C: proximity breath (only audible as something closes in) ----
+    const breathSrc = ctx.createBufferSource();
+    breathSrc.buffer = this.noiseBuffer;
+    breathSrc.loop = true;
+
+    const breathBand = ctx.createBiquadFilter();
+    breathBand.type = 'bandpass';
+    breathBand.frequency.value = 520;
+    breathBand.Q.value = 1.1;
+
+    this.atmosphereBreathGain = ctx.createGain();
+    this.atmosphereBreathGain.gain.value = 0.0001;
+
+    breathSrc.connect(breathBand);
+    breathBand.connect(this.atmosphereBreathGain);
+    this.atmosphereBreathGain.connect(this.atmosphereGain);
+    breathSrc.start();
+    this.atmosphereSrcNodes.push(breathSrc);
+
+    // Slow in/out so it reads as breathing rather than hiss
+    const breathOsc = ctx.createOscillator();
+    breathOsc.type = 'sine';
+    breathOsc.frequency.value = 0.32;
+    const breathDepth = ctx.createGain();
+    breathDepth.gain.value = 0.05;
+    breathOsc.connect(breathDepth);
+    breathDepth.connect(this.atmosphereBreathGain.gain);
+    breathOsc.start();
+    this.atmosphereOscNodes.push(breathOsc);
+    (breathOsc as unknown as { _depth?: GainNode })._depth = breathDepth;
+
+    // --- Layer D: distant room events --------------------------------------
     this.scheduleAtmosphereEvent();
   }
 
@@ -331,6 +365,7 @@ export class HorrorAudioEngine {
     this.atmosphereSubGain?.disconnect();
     this.atmosphereWindGain?.disconnect();
     this.atmosphereDroneBreath?.disconnect();
+    this.atmosphereBreathGain?.disconnect();
     this.atmosphereGain = null;
     this.atmosphereSend = null;
     this.reverb = null;
@@ -338,6 +373,40 @@ export class HorrorAudioEngine {
     this.atmosphereSubGain = null;
     this.atmosphereWindGain = null;
     this.atmosphereDroneBreath = null;
+    this.atmosphereBreathGain = null;
+  }
+
+  /**
+   * Drives the "something is closing in" layer set from the renderer's nearest-entity
+   * distance: breathing gets louder, the room ducks to near-silence, and the heart
+   * rate climbs. Distance is in metres.
+   */
+  public setThreatProximity(distanceMeters: number) {
+    if (!this.ctx || this.muted) return;
+    const d = Number.isFinite(distanceMeters) ? distanceMeters : 99;
+    // 0 at ~3.8 m, 1 at 0.6 m
+    const near = Math.max(0, Math.min(1, 1 - (d - 0.6) / 3.2));
+    this.proximity = near;
+    const now = this.ctx.currentTime;
+
+    // Breathing rises steeply as it closes.
+    this.atmosphereBreathGain?.gain.setTargetAtTime(near * near * 0.12, now, 0.25);
+
+    // The room falls quiet right before it reaches you — the silence is the warning.
+    const duck = 1 - 0.65 * near * near;
+    this.atmosphereGain?.gain.setTargetAtTime(
+      (0.1 + this.atmosphereIntensity * 0.2) * duck,
+      now,
+      0.3,
+    );
+
+    // Heartbeat ramps with proximity: ~0.9 Hz far away to ~3.3 Hz at arm's length.
+    const wallMs = performance.now();
+    const intervalMs = 1000 / (0.9 + near * 2.4);
+    if (near > 0.18 && wallMs - this.lastProximityPulseMs > intervalMs) {
+      this.lastProximityPulseMs = wallMs;
+      this.playHeartbeatThump(0.05 + near * 0.1);
+    }
   }
 
   /** Randomised far-off creak / settle / knock, panned somewhere around the player. */

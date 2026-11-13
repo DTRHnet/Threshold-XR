@@ -27,6 +27,13 @@ const _xrMat = new THREE.Matrix4();
 const _xrEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _dimFwd = new THREE.Vector3();
 
+/** How close an unobserved entity may get before it strikes. */
+const STRIKE_DISTANCE = 0.85;
+
+/** Half-angle of the cone that freezes an entity. Wider than the flat camera's
+ * half-FOV so nothing advances while it is actually visible in a headset. */
+const WATCHED_CONE_DEG = 42;
+
 function detectSoftwareWebGL(): boolean {
   try {
     const probeCanvas = document.createElement('canvas');
@@ -277,6 +284,8 @@ export interface RendererCallbacks {
   onPoseUpdate: (pos: Vec3, yawRad: number, pitchRad: number) => void;
   onXrPlanesUpdated?: (planes: DetectedPlaneSnapshot[]) => void;
   onXrSessionEnded?: () => void;
+  /** Fired when an entity closes to touching distance while unobserved. */
+  onThreatStrike?: (azimuthDeg: number, threatId: string) => void;
 }
 
 export class ThresholdRoomRenderer {
@@ -290,6 +299,11 @@ export class ThresholdRoomRenderer {
   private xrOcclusionGroup = new THREE.Group();
   private threatGroup = new THREE.Group();
   private threatMeshes = new Map<string, { group: THREE.Group; archetype: ThreatArchetype }>();
+
+  // Stalk state: an entity's live position independent of the slot it spawned from.
+  // It creeps toward the player whenever it is not being looked at.
+  private approach = new Map<string, { pos: THREE.Vector3; struck: boolean; bornSec: number }>();
+  private nearestThreatDist = Infinity;
 
   // Intelligent shadow/light anomaly rigging (works in both 3D room & WebXR passthrough)
   private hemiLight: THREE.HemisphereLight;
@@ -605,6 +619,8 @@ export class ThresholdRoomRenderer {
     }
     this.threatMeshes.clear();
     this.activeThreats = [];
+    this.approach.clear();
+    this.nearestThreatDist = Infinity;
   }
 
   public setPassthroughDimness(compressionFactor: number) {
@@ -1315,11 +1331,84 @@ export class ThresholdRoomRenderer {
     }
 
     if (this.gameState === 'playing') {
+      this.updateThreatApproach(dt, time / 1000);
       this.updateThreatVisuals(time / 1000);
       this.updateShadowAnomalies(dt, time / 1000);
     }
     this.renderer.render(this.scene, this.camera);
   };
+
+  /**
+   * Stalking: every entity creeps toward the player as long as it is NOT inside the
+   * player's focus cone. Look at it and it freezes; look away and it gains ground.
+   * Reaching touching distance is what ends a run.
+   *
+   * This is the whole tension loop — with two entities live you cannot watch both.
+   */
+  private updateThreatApproach(dt: number, elapsedSec: number) {
+    const px = this.playerPos.x;
+    const pz = this.playerPos.z;
+    const fwdX = -Math.sin(this.playerYaw);
+    const fwdZ = -Math.cos(this.playerYaw);
+    let nearest = Infinity;
+    const live = new Set<string>();
+
+    for (const threat of this.activeThreats) {
+      live.add(threat.id);
+      let st = this.approach.get(threat.id);
+      if (!st) {
+        st = {
+          pos: new THREE.Vector3(threat.position.x, 0, threat.position.z),
+          struck: false,
+          bornSec: elapsedSec,
+        };
+        this.approach.set(threat.id, st);
+      }
+
+      const relX = st.pos.x - px;
+      const relZ = st.pos.z - pz;
+      const dist = Math.hypot(relX, relZ) || 1e-6;
+      nearest = Math.min(nearest, dist);
+
+      const dot = (relX / dist) * fwdX + (relZ / dist) * fwdZ;
+      const offAxisDeg = (Math.acos(THREE.MathUtils.clamp(dot, -1, 1)) * 180) / Math.PI;
+      // In view = frozen. The cone is deliberately wider than the flat-mode camera's
+      // half-FOV (34 deg) so anything the player can actually see in a headset
+      // (~100 deg FOV) counts as watched — it must never advance while visible.
+      const watched = offAxisDeg < WATCHED_CONE_DEG;
+
+      if (!watched && !st.struck) {
+        if (dist > STRIKE_DISTANCE) {
+          // Creeps faster as the run progresses — the room closes in over time.
+          const speed = 0.1 + 0.28 * Math.min(1, elapsedSec / 110);
+          const step = Math.min(speed * dt, dist - STRIKE_DISTANCE);
+          st.pos.x -= (relX / dist) * step;
+          st.pos.z -= (relZ / dist) * step;
+        } else {
+          // Grace period + must be fully manifested, otherwise an entity that spawns
+          // close (or is still fading in) would kill the player instantly.
+          const manifested = threat.manifestation >= 0.8;
+          const settled = elapsedSec - st.bornSec > 2.5;
+          if (manifested && settled) {
+            st.struck = true;
+            const cross = fwdX * relZ - fwdZ * relX;
+            const azimuthDeg = (Math.atan2(cross, dot) * 180) / Math.PI;
+            this.callbacksRef.current.onThreatStrike?.(Math.round(azimuthDeg), threat.id);
+          }
+        }
+      }
+    }
+
+    for (const id of [...this.approach.keys()]) {
+      if (!live.has(id)) this.approach.delete(id);
+    }
+    this.nearestThreatDist = nearest;
+  }
+
+  /** Metres to the closest live entity, for proximity-driven audio and effects. */
+  public getNearestThreatDistance(): number {
+    return this.nearestThreatDist;
+  }
 
   private updateThreatVisuals(elapsedSec: number) {
     for (const threat of this.activeThreats) {
@@ -1330,47 +1419,45 @@ export class ThresholdRoomRenderer {
       const m = Math.pow(Math.max(0, Math.min(1, threat.manifestation)), 1.7);
       const seed = threatMotionSeed(threat.id);
 
+      // Render from the stalk position, not the spawn slot, and always turn to face
+      // the player: being looked AT by it is the point.
+      const st = this.approach.get(threat.id);
+      const px = st ? st.pos.x : threat.position.x;
+      const pz = st ? st.pos.z : threat.position.z;
+      const faceYaw = Math.atan2(this.playerPos.x - px, this.playerPos.z - pz);
+
       if (entry.archetype === 'FaceAssault') {
-        entry.group.position.set(threat.position.x, threat.position.y, threat.position.z);
-        entry.group.rotation.y = Math.atan2(threat.normal.x, threat.normal.z);
+        entry.group.position.set(px, threat.position.y, pz);
+        entry.group.rotation.y = faceYaw;
         const pulse = 1 + Math.sin(elapsedSec * 28) * 0.035;
         entry.group.scale.setScalar(THREE.MathUtils.lerp(0.65, 1.08 * pulse, m));
       } else if (entry.archetype === 'InterceptStalker') {
-        entry.group.position.set(threat.position.x, 0, threat.position.z);
-        entry.group.rotation.y = Math.atan2(threat.normal.x, threat.normal.z);
+        entry.group.position.set(px, 0, pz);
+        entry.group.rotation.y = faceYaw;
         entry.group.scale.setScalar(THREE.MathUtils.lerp(0.82, 1.05, m));
       } else if (entry.archetype === 'WallPeel') {
-        const depthScale = THREE.MathUtils.lerp(0.05, 1.0, m);
-        entry.group.scale.set(1, THREE.MathUtils.lerp(0.85, 1.06, m), depthScale);
-        entry.group.position.set(
-          threat.position.x + threat.normal.x * (m * 0.16),
-          0,
-          threat.position.z + threat.normal.z * (m * 0.16),
+        // Still reads as peeling out of a surface, then advances off it.
+        entry.group.scale.set(
+          THREE.MathUtils.lerp(1, 1.06, m),
+          THREE.MathUtils.lerp(0.85, 1.08, m),
+          THREE.MathUtils.lerp(0.06, 1.0, m),
         );
+        entry.group.position.set(px + threat.normal.x * (1 - m) * 0.12, 0, pz + threat.normal.z * (1 - m) * 0.12);
+        entry.group.rotation.y = faceYaw;
       } else if (entry.archetype === 'UnderVoidCrawler') {
-        entry.group.position.set(
-          threat.position.x + threat.normal.x * (m * 0.48),
-          0,
-          threat.position.z + threat.normal.z * (m * 0.48),
-        );
-        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.65, 1.0, m));
+        entry.group.position.set(px, 0, pz);
+        entry.group.rotation.y = faceYaw;
+        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.7, 1.05, m));
       } else if (entry.archetype === 'CeilingHang') {
         const ceilingY =
           threat.position.y > 1.5 ? threat.position.y : this.currentRoom.height;
-        entry.group.position.set(
-          threat.position.x,
-          ceilingY + (1 - m) * 0.55,
-          threat.position.z,
-        );
+        entry.group.position.set(px, ceilingY + (1 - m) * 0.55, pz);
         entry.group.scale.setScalar(THREE.MathUtils.lerp(0.88, 1.0, m));
         entry.group.rotation.z = Math.sin(elapsedSec * 0.9) * 0.05;
       } else {
-        entry.group.position.set(
-          threat.position.x + threat.normal.x * (m * 0.18),
-          0,
-          threat.position.z + threat.normal.z * (m * 0.18),
-        );
-        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.82, 1.0, m));
+        entry.group.position.set(px, 0, pz);
+        entry.group.rotation.y = faceYaw;
+        entry.group.scale.setScalar(THREE.MathUtils.lerp(0.82, 1.02, m));
       }
 
       // Living micro-motion: a slow sway plus a fine tremor, deterministic per threat
@@ -1382,6 +1469,7 @@ export class ThresholdRoomRenderer {
       entry.group.rotation.z += Math.sin(elapsedSec * (1.25 + seed) + seed * 2.0) * 0.038 * m;
     }
   }
+
 
   private tick = () => {
     if (this.disposed) return;
@@ -1404,6 +1492,7 @@ export class ThresholdRoomRenderer {
       this.camera.lookAt(_lookTarget);
     } else if (this.gameState === 'playing') {
       this.updatePlayer(dt);
+      this.updateThreatApproach(dt, now / 1000);
       this.updateThreatVisuals(now / 1000);
       this.updateShadowAnomalies(dt, now / 1000);
     }
